@@ -13,11 +13,13 @@
   <ItemGroup>
     <ClInclude Include="download\download.h" />
     <ClInclude Include="keys.h" />
+    <ClInclude Include="slow_flush.h" />
     <ClInclude Include="workers.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="download\download.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="slow_flush.cpp" />
     <ClCompile Include="workers.cpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">

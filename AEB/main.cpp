@@ -7,7 +7,13 @@
 
 int main()
 {
-	print([&] {std::cout << "[!] Starting bot..." << std::endl; });
+	std::set_terminate([] {std::cout << "std::terminate() called before any handleAbort."; std::abort(); });
+	signal(SIGABRT, [](int e){std::cout << "abort() called with code #" << e; std::abort(); });
+	signal(SIGTERM, [](int e){std::cout << "termination request called with code #" << e; std::abort(); });
+	signal(SIGSEGV, [](int e){std::cout << "invalid memory access called with code #" << e; std::abort(); });
+	signal(SIGINT, [](int e){std::cout << "external interrupt called with code #" << e; std::abort(); });
+	signal(SIGILL, [](int e){std::cout << "invalid instruction called with code #" << e; std::abort(); });
+	signal(SIGFPE, [](int e){std::cout << "erroneous arithmetic called with code #" << e; std::abort(); });
 
 	std::vector<std::shared_ptr<data_being_worked_on>> workers;
 	std::mutex workers_m;
@@ -19,12 +25,13 @@ int main()
 		delete c;
 	});
 
+	auto logg = thebot->log;
 	
 	// join in guild
 	thebot->set_on_guild_create([&](aegis::gateway::events::guild_create obj) {
-		print([&] {std::cout << "[!] Joined/Connected Guild " << obj.guild.name << " #" << obj.guild.id << " (" << obj.guild.name << ") from " << obj.guild.region.c_str() << std::endl; });
+		logg->info("[!] Joined/Connected Guild {} #{} from {}", obj.guild.name, obj.guild.id, obj.guild.region);
 		if (has_flush(obj.guild.id)) {
-			print([&] {std::cout << "[!] Detected pendencies on Guild " << obj.guild.name << " #" << obj.guild.id << " (" << obj.guild.name << ") from " << obj.guild.region.c_str() << std::endl; });
+			logg->warn("[!] Detected pendencies on Guild {} #{} from {}", obj.guild.name, obj.guild.id, obj.guild.region);
 
 			std::lock_guard gurd(workers_m);
 			workers.emplace_back(std::move(std::make_shared<data_being_worked_on>(thebot, obj.guild.id)));
@@ -36,13 +43,13 @@ int main()
 
 		if (auto msgg = obj.msg.get_content(); msgg.find("lsw/aeb") == 0) {
 			auto default_help = [&] {
-				obj.channel.create_message("Use: `lsw/aeb [ (backup <to> [<from> ...]) | refresh ]`");
+				slow_flush("Use: `lsw/aeb [ (backup <to> [<from> ...]) | refresh ]`", obj.channel, obj.msg.get_guild_id(), thebot->log);
 			};
 
 			if (msgg.find("lsw/aeb refresh") == 0) {
 				auto guildid = obj.msg.get_guild().get_id();
 				if (has_flush(guildid)) {
-					obj.channel.create_message("Got work to do. Loading.");
+					slow_flush("Got work to do. Loading.", obj.channel, obj.msg.get_guild_id(), thebot->log);
 					std::lock_guard gurd(workers_m);
 					workers.emplace_back(std::move(std::make_shared<data_being_worked_on>(thebot, guildid)));
 				}
@@ -90,8 +97,8 @@ int main()
 						obj.channel.create_message("Can't find chat " + k);
 						return;
 					}
-					print([&] {std::cout << "[!] Guild #" << obj.msg.get_guild_id() << " (User: " << obj.msg.author.username << "#" << obj.msg.author.discriminator << " ID#" << obj.msg.author.id << ") called for backup." << std::endl
-						<< "- Channels being saved: " << chats_to_read.size() << std::endl; });
+					logg->info("[!] Guild #{} (User: {}#{} #{}) called for backup.", obj.msg.get_guild_id(), obj.msg.author.username, obj.msg.author.discriminator, obj.msg.author.id);
+					logg->info("[!] Guild #{}: Channels being saved: {}", obj.msg.get_guild_id(), chats_to_read.size());
 
 					for (size_t ppp = 0; ppp < workers.size(); ppp++) {
 						if (workers[ppp]->done()) {
@@ -117,7 +124,7 @@ int main()
 		auto keep = [&] {return (!ignore_all_ending_lmao); };
 
 		while (keep()) {
-			thebot->update_presence("lsw/aeb - V1.6.3.1", aegis::gateway::objects::activity::Game, aegis::gateway::objects::presence::Idle);
+			thebot->update_presence("lsw/aeb - " + version, aegis::gateway::objects::activity::Game, aegis::gateway::objects::presence::DoNotDisturb);
 			for (size_t c = 0; c < 50 && keep(); c++) {
 				std::this_thread::yield();
 				std::this_thread::sleep_for(std::chrono::seconds(6));
@@ -145,14 +152,14 @@ int main()
 			for (size_t p = 0; p < workers.size(); p++) {
 				if (workers[p]->done())
 				{
-					print([&] {std::cout << "[!] One worker got the job done." << std::endl; });
+					logg->info("[!] One worker got the job done.");
 					workers.erase(workers.begin() + p--);
 					got_one = true;
 				}
 			}
 			
 			if (got_one) {
-				print([&] {std::cout << "[!] Cleanup job tasked." << std::endl; });
+				logg->info("[!] Cleanup job tasked.");
 			}
 		}
 
@@ -166,7 +173,10 @@ int main()
 	workers_m.lock();
 	for (auto& i : workers) i->has_to_die_now_please_goodbye();
 	workers_m.unlock();
+
+	logg->info("[!] Ended bot entirely.");
+
 	thebot->shutdown();
 	workers.clear();
-	print([&] {std::cout << "[!] Ended bot entirely." << std::endl; });
+	if (here_lol2.joinable()) here_lol2.join();
 }

@@ -1,6 +1,7 @@
 #pragma once
 #include <aegis.hpp>
 #include "download/download.h"
+#include "slow_flush.h"
 
 #include <Windows.h>
 
@@ -12,6 +13,7 @@
 #define NOW_T std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
 
 const std::string project_name = "AEB";
+const std::string version = "V1.6.4.2";
 const unsigned long long idd = 749852332321144863;
 const unsigned long long mee_dev = 280450898885607425; // myself, for debugging and help
 
@@ -20,13 +22,6 @@ using namespace LSW::v5;
 
 LONGLONG getFileSize(const std::string&);
 
-void print(std::function<void(void)>);
-
-/*std::string format_as_i_wish(const double v) {
-	char buf[64];
-	sprintf_s(buf, "%.1lf", v);
-	return buf;
-}*/
 
 struct D { // deleter
 	void operator()(FILE* p) const {
@@ -34,7 +29,6 @@ struct D { // deleter
 		p = nullptr;
 	};
 };
-
 
 
 struct custom_message_save {
@@ -57,6 +51,7 @@ struct custom_message_save {
 
 class data_being_worked_on {
 	std::shared_ptr<aegis::core> thebot;
+	std::shared_ptr<spdlog::logger> logg;
 	aegis::snowflake guildid;
 	aegis::snowflake channel_from;
 	aegis::snowflake channel_output;
@@ -90,12 +85,6 @@ class data_being_worked_on {
 	aegis::channel* notif_ch();
 	aegis::channel* save_ch();
 	aegis::channel* specific_ch(aegis::snowflake);
-
-	bool slow_flush(std::string, aegis::channel&);
-	bool slow_flush(aegis::create_message_t, aegis::channel&);
-
-	bool slow_flush_embed(nlohmann::json, aegis::channel&);
-	bool slow_flush_embed(aegis::gateway::objects::embed, aegis::channel&);
 
 	void flush_file();
 	bool prepare_and_load_any_pendencies(bool);

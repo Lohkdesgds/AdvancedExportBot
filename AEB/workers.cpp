@@ -19,13 +19,6 @@ LONGLONG getFileSize(const std::string& s)
 	return size.QuadPart;
 }
 
-void print(std::function<void(void)> f) {
-	static std::mutex m;
-	m.lock();
-	f();
-	m.unlock();
-}
-
 custom_message_save::custom_message_save(aegis::gateway::objects::message& m)
 {
 	timestamp = m.timestamp;
@@ -50,22 +43,27 @@ int data_being_worked_on::get_messages_one_channel() {
 
 	std::this_thread::yield();
 
+	if (just_die) {
+		logg->info("Guild #{} gave up on its task (emergency exit called).", guildid);
+		return -1;
+	}
+
 	if (channels_to_save.size() == 0) return 0;
 	if (in_order.size() > 1) return 1;
 
 	auto& one = channels_to_save.front();
 
-	print([&] {std::cout << "Searching channel #" << one << " for reading..." << std::endl; });
+	logg->info("Searching channel #{} for reading...", one);
 	std::this_thread::yield();
-	if (auto* ch = notif_ch(); ch) if (!slow_flush("Searching channel #" + std::to_string(one) + " for reading...", *ch)) throw - 3;
+	if (auto* ch = notif_ch(); ch) if (!slow_flush("Searching channel #" + std::to_string(one) + " for reading...", *ch, guildid, thebot->log)) throw - 3;
 
 	aegis::channel* this_ch = specific_ch(one);
 
 	if (!this_ch) {
 		if (++failures >= 10) {
-			print([&] {std::cout << "Skipping channel #" << one << " because of multiple fails (10)." << std::endl; });
+			logg->info("Skipping channel #{} because of multiple fails (10).", one);
 
-			if (auto* ch = notif_ch(); ch) if (!slow_flush("Skipping channel #" + std::to_string(one) + " because of multiple fails (10).", *ch)) throw - 3;
+			if (auto* ch = notif_ch(); ch) if (!slow_flush("Skipping channel #" + std::to_string(one) + " because of multiple fails (10).", *ch, guildid, thebot->log)) throw - 3;
 
 			std::this_thread::yield();
 
@@ -79,9 +77,9 @@ int data_being_worked_on::get_messages_one_channel() {
 	}
 	else failures = 0;
 
-	print([&] {std::cout << "Got channel #" << one << "." << std::endl; });
+	logg->info("Got channel #{}.", one);
 	std::this_thread::yield();
-	if (auto* ch = notif_ch(); ch) if (!slow_flush("Found channel <#" + std::to_string(one) + ">. Reading channel...", *ch)) throw - 3;
+	if (auto* ch = notif_ch(); ch) if (!slow_flush("Found channel <#" + std::to_string(one) + ">. Reading channel...", *ch, guildid, thebot->log)) throw - 3;
 
 	aegis::snowflake last_message_id = this_ch->get_last_message_id();
 
@@ -92,16 +90,22 @@ int data_being_worked_on::get_messages_one_channel() {
 
 	in_order[one].second = this_ch->get_name();
 
-	try {
-		auto messages = this_ch->get_messages(message_get_formula).get();
+	for (size_t p = 0; p < 7; p++) {
+		try {
+			auto messages = this_ch->get_messages(message_get_formula).get();
 
-		for (auto& o : messages._messages) {
-			in_order[one].first[o.timestamp + std::to_string(o.get_id())] = o;
+			for (auto& o : messages._messages) {
+				in_order[one].first[o.timestamp + std::to_string(o.get_id())] = o;
+			}
+
+			break;
 		}
-
-	}
-	catch (...) {
-		print([&] {std::cout << "[Local] Failed to get last message on channel #" << one << ". No worries." << std::endl; });
+		catch (...) {
+			logg->info("[{}/7][Local] Failed to get last message on channel #{}. No worries if it fails all the times.", p + 1, one);
+			std::this_thread::yield();
+			std::this_thread::sleep_for(std::chrono::milliseconds(500));
+			std::this_thread::yield();
+		}
 	}
 
 	message_get_formula.message_id(last_message_id);
@@ -113,6 +117,11 @@ int data_being_worked_on::get_messages_one_channel() {
 
 	try {
 		do {
+			if (just_die) {
+				logg->info("Guild #{} gave up on its task (emergency exit called).", guildid);
+				return -1;
+			}
+
 			message_get_formula.message_id(last_now);
 			latest_messages._messages.clear();
 			latest_messages = this_ch->get_messages(message_get_formula).get();
@@ -129,19 +138,19 @@ int data_being_worked_on::get_messages_one_channel() {
 				}
 			}
 
-			print([&] {std::cout << "[Local] Reading channel #" << one << "... (" << in_order[one].first.size() << " messages in memory)" << std::endl; });
+			logg->info("[Local] Reading channel #{}... ({} messages in memory)", one, in_order[one].first.size());
 			if (!changed_once) break;
 
 		} while (latest_messages._messages.size() > 0);
 	}
 	catch (...) {
-		print([&] {std::cout << "[Local] Something went wrong while reading channel #" << one << ". Trying again..." << std::endl; });
+		logg->info("[Local] Something went wrong while reading channel #{}. Trying again...", one);
 		return 3;
 	}
 
-	print([&] {std::cout << "Fully read channel #" << one << ". (" << in_order[one].first.size() << " messages in memory)" << std::endl; });
+	logg->info("Fully read channel #{}. ({} messages in memory)", one, in_order[one].first.size());
 	std::this_thread::yield();
-	if (auto* ch = notif_ch(); ch) if (!slow_flush("Fully read channel <#" + std::to_string(one) + ">. (" + std::to_string(in_order[one].first.size()) + " messages in memory)", *ch)) throw - 3;
+	if (auto* ch = notif_ch(); ch) if (!slow_flush("Fully read channel <#" + std::to_string(one) + ">. (" + std::to_string(in_order[one].first.size()) + " messages in memory)", *ch, guildid, thebot->log)) throw - 3;
 
 	channels_to_save.erase(channels_to_save.begin()); // done
 
@@ -152,19 +161,30 @@ int data_being_worked_on::get_messages_one_channel() {
 
 int data_being_worked_on::send_one_channels_messages() {
 	if (in_order.size() == 0) return 0;
+	if (just_die) {
+		logg->info("Guild #{} gave up on its task (emergency exit called).", guildid);
+		return -1;
+	}
 
 	auto& i = *in_order.begin();
 
-	print([&] {std::cout << "Flushing channel #" << i.first << "... (" << i.second.first.size() << " message(s) and " << (channels_to_save.size() + 1) << " chat(s) remaining)" << std::endl; });
-	if (auto* ch = notif_ch(); ch) if (!slow_flush("Flushing channel <#" + std::to_string(i.first) + "> (#" + std::to_string(i.first) + ", " + std::to_string(i.second.first.size()) + " message(s) and " + std::to_string(channels_to_save.size() + 1) + " chat(s) remaining)", *ch)) throw - 3;
+	logg->info("Flushing channel #{}... ({} message(s) and {} chat(s) remaining)", i.first, i.second.first.size(), (channels_to_save.size() + 1));
+	if (auto* ch = notif_ch(); ch) if (!slow_flush("Flushing channel <#" + std::to_string(i.first) + "> (#" + std::to_string(i.first) + ", " + std::to_string(i.second.first.size()) + " message(s) and " + std::to_string(channels_to_save.size() + 1) + " chat(s) remaining)", *ch, guildid, thebot->log)) throw - 3;
 
-	aegis::channel* copy_ch = save_ch();
+	aegis::channel* copy_ch = nullptr;
+	try {
+		copy_ch = save_ch();
+	}
+	catch (...) {
+		logg->info("Failed to get save chat on Guild #{}", guildid);
+		return 2;
+	}
 
 	if (!copy_ch) {
 		if (++failures >= 10) {
-			print([&] {std::cout << "Aborting because the flush channel is not available anymore." << std::endl; });
+			logg->error("Aborting because the flush channel is not available anymore.");
 
-			if (auto* ch = notif_ch(); ch) slow_flush("Aborting because the flush channel is not available anymore.", *ch);
+			if (auto* ch = notif_ch(); ch) slow_flush("Aborting because the flush channel is not available anymore.", *ch, guildid, thebot->log);
 			else throw 1;
 
 			return 3;
@@ -173,7 +193,7 @@ int data_being_worked_on::send_one_channels_messages() {
 	}
 	else failures = 0;
 
-	print([&] {std::cout << "[Local] Got channel #" << channel_output << "." << std::endl; });
+	logg->info("[Local] Got channel #{}.", channel_output);
 	last_thousand = NOW_T;
 
 	size_t calc_amount_per_t = i.second.first.size();
@@ -181,7 +201,7 @@ int data_being_worked_on::send_one_channels_messages() {
 	while (i.second.first.size() > 0) {
 
 		if (just_die) {
-			print([&] {std::cout << "Guild #" << guildid << " gave up on its task (emergency exit called)." << std::endl; });
+			logg->info("Guild #{} gave up on its task (emergency exit called).", guildid);
 			return -1;
 		}
 
@@ -189,6 +209,7 @@ int data_being_worked_on::send_one_channels_messages() {
 		std::string key = i.second.second;
 
 		if (i.second.first.size() % 50 == 0 && i.second.first.size() > 0) {
+			logg->info("Updating bot nickname on Guild #{}", guildid);
 			try {
 				auto u = thebot->guild_create(guildid, &thebot->get_shard_by_guild(guildid));
 				if (i.second.first.size() / 50 == 1) u->modify_my_nick("AdvancedExportBot");
@@ -196,22 +217,23 @@ int data_being_worked_on::send_one_channels_messages() {
 			}
 			catch (aegis::error e) {
 				static aegis::category one;
-				print([&] {std::cout << "Guild #" << guildid << " failed to update nickname: " << one.message(e) << std::endl; });
+				logg->warn("Guild #{} failed to update nickname: {}", guildid, one.message(e));
 			}
 			catch (std::exception e) {
-				print([&] {std::cout << "Guild #" << guildid << " failed to update nickname: " << e.what() << std::endl; });
+				logg->warn("Guild #{} failed to update nickname: {}", guildid, e.what());
 			}
 			catch (...) {
-				print([&] {std::cout << "Guild #" << guildid << " failed to update nickname. Unknown error." << std::endl; });
+				logg->warn("Guild #{} failed to update nickname. Unknown error.", guildid);
 			}
 		}
 
 		if (i.second.first.size() % 1000 == 0 && i.second.first.size() > 0) {
+			logg->info("Updating bot ETA on Guild #{}", guildid);
 			size_t prop = calc_amount_per_t - i.second.first.size(); // 1000 is the default.
 
 			if (prop < 100) prop = 100;
 			else if (prop > 1000) {
-				print([&] {std::cout << "Guild #" << guildid << " got weird amount on last_size - size()." << std::endl; });
+				logg->warn("Guild #{} got weird amount on last_size - size().", guildid);
 				prop = 1000;
 			}
 
@@ -264,8 +286,8 @@ int data_being_worked_on::send_one_channels_messages() {
 
 
 
-			print([&] {std::cout << "#" << i.first << " has " << i.second.first.size() << " messages remaining now. Last message took: " << end_str << ". ETA: " << to_end << std::endl; });
-			if (auto* ch = notif_ch(); ch) if (!slow_flush(std::to_string(i.second.first.size()) + " messages to go. Time taken (" + std::to_string(prop) + " message(s)): " + end_str + ". Estimated time for this chat (based on this): " + to_end + ".", *ch)) throw - 3;
+			logg->info("#{} has {} messages remaining now. Last message took: {}. ETA: {}", i.first, i.second.first.size(), end_str, to_end);
+			if (auto* ch = notif_ch(); ch) if (!slow_flush(std::to_string(i.second.first.size()) + " messages to go. Time taken (" + std::to_string(prop) + " message(s)): " + end_str + ". Estimated time for this chat (based on this): " + to_end + ".", *ch, guildid, thebot->log)) throw - 3;
 		}
 
 		{
@@ -279,16 +301,27 @@ int data_being_worked_on::send_one_channels_messages() {
 
 				if (calculated.length() <= 2000) { // <= 2000 is fine
 					msg.content(calculated);
-					if (!slow_flush(msg, *copy_ch)) throw - 3;
+					if (!slow_flush(msg, *copy_ch, guildid, thebot->log)) throw - 3;
+					k.has_cleared_content_already = true;
+					flush_file();
+
+					std::this_thread::yield();
+					std::this_thread::sleep_for(wait_for_auto());
+					std::this_thread::yield();
 				}
 				else { // split if more
 					msg.content(u8"```md\n[" + k.timestamp + u8"](" + key + u8")<" + k.username + "#" + k.discriminator + u8"> sent huge block:```"); // send message content itself just to be sure 2000 chars are cool
-					if (!slow_flush(msg, *copy_ch)) throw - 3;
-					if (!slow_flush(aegis::create_message_t().content(k.content), *copy_ch)) throw - 3;
+					if (!slow_flush(msg, *copy_ch, guildid, thebot->log)) throw - 3;
+
+					if (!slow_flush(aegis::create_message_t().content(k.content), *copy_ch, guildid, thebot->log)) throw - 3;
+					k.has_cleared_content_already = true;
+					flush_file();
+
+					std::this_thread::yield();
+					std::this_thread::sleep_for(wait_for_auto());
+					std::this_thread::yield();
 				}
 			}
-			k.has_cleared_content_already = true;
-			flush_file();
 
 			// - - - - - - - - - - > REACTIONS < - - - - - - - - - - //
 
@@ -298,24 +331,34 @@ int data_being_worked_on::send_one_channels_messages() {
 				//std::string autoemoji = i.emoji_.id != 0 ? ((i.emoji_.animated ? u8"<a:" : u8"<:") + i.emoji_.name + u8":" + std::to_string(i.emoji_.id) + u8">") : i.emoji_.name;
 				//msg2.content(u8"` ⇒ has react: " + autoemoji + " x" + std::to_string(i.count) + "`");
 				msg2.content(u8"` ⇒ has react: " + i.first + " x" + std::to_string(i.second) + "`");
-				if (!slow_flush(msg2, *copy_ch)) throw - 3;
+				if (!slow_flush(msg2, *copy_ch, guildid, thebot->log)) throw - 3;
+
 				k.reactions.erase(k.reactions.begin());
 				flush_file();
+
+				std::this_thread::yield();
+				std::this_thread::sleep_for(wait_for_auto());
+				std::this_thread::yield();
 			}
 
 			// - - - - - - - - - - > EMBEDS < - - - - - - - - - - //
 
 			while (k.embeds_json.size() > 0) {
 				auto& i = k.embeds_json.front();
-				if (!slow_flush_embed(nlohmann::json::parse(i), *copy_ch)) {
+				if (!slow_flush_embed(nlohmann::json::parse(i), *copy_ch, guildid, thebot->log)) {
 					std::string bus = "Impossible to load embed: " + i;
 					if (bus.length() > 2000) {
 						bus = bus.substr(0, 1997) + "...";
 					}
-					if (!slow_flush(bus, *copy_ch)) throw -3;
+					if (!slow_flush(bus, *copy_ch, guildid, thebot->log)) throw -3;
 				}
+
 				k.embeds_json.erase(k.embeds_json.begin());
 				flush_file();
+
+				std::this_thread::yield();
+				std::this_thread::sleep_for(wait_for_auto());
+				std::this_thread::yield();
 			}
 
 			// - - - - - - - - - - > FILES < - - - - - - - - - - //
@@ -327,16 +370,18 @@ int data_being_worked_on::send_one_channels_messages() {
 				down.getASync(i.first.c_str());
 
 				while (!down.ended()) {
-					//print([&] {std::cout << "Downloading " << (down.bytesRead() * 100.0 / i.size) << "%" << std::endl; });
 					std::this_thread::yield();
-					std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+					std::this_thread::sleep_for(std::chrono::milliseconds(300));
 				}
-				//print([&] {std::cout << "Downloading 100%" << std::endl; });
 
-				print([&] {std::cout << "Downloaded " << i.second << std::endl; });
+				logg->info("Downloaded {}.", i.second);
 
 				if (down.read().size() > MAX_FILE_SIZE) {
-					if (!slow_flush("`Had to split file. This is the RAW data split in " + std::to_string((int)(1 + (down.read().size() - 1) / MAX_FILE_SIZE)) + " slices`.", *copy_ch)) throw -3;
+					if (!slow_flush("`Had to split file. This is the RAW data split in " + std::to_string((int)(1 + (down.read().size() - 1) / MAX_FILE_SIZE)) + " slices`.", *copy_ch, guildid, thebot->log)) throw -3;
+
+					std::this_thread::yield();
+					std::this_thread::sleep_for(wait_for_auto());
+					std::this_thread::yield();
 				}
 
 				for (size_t cuts = 0; cuts <= ((down.read().size() == 0 ? 0 : down.read().size() - 1) / MAX_FILE_SIZE); cuts++) { // if 8000, goes once.
@@ -348,7 +393,11 @@ int data_being_worked_on::send_one_channels_messages() {
 					msg2.file(fp);
 					msg2.content(i.second);
 
-					if (!slow_flush(msg2, *copy_ch)) throw -3;
+					if (!slow_flush(msg2, *copy_ch, guildid, thebot->log)) throw -3;
+
+					std::this_thread::yield();
+					std::this_thread::sleep_for(wait_for_auto());
+					std::this_thread::yield();
 				}
 
 				k.attachments.erase(k.attachments.begin());
@@ -381,22 +430,31 @@ void data_being_worked_on::work() {
 						doing = false;
 						break;
 					case 1:
-						print([&] {std::cout << "Done flushing this chat." << std::endl; });
-						if (auto* ch = notif_ch(); ch) { if (!slow_flush("Done flushing this chat.", *ch)) throw - 3; }
+						logg->info("Done flushing this chat.");
+						if (auto* ch = notif_ch(); ch) { if (!slow_flush("Done flushing this chat.", *ch, guildid, thebot->log)) throw - 3; }
 						else throw 1;
+
+						std::this_thread::yield();
+						std::this_thread::sleep_for(wait_for_auto());
+						std::this_thread::yield();
+
 						break;
 					case 2:
-						print([&] {std::cout << "Something went wrong while flushing the list. Trying again in 10 seconds." << std::endl; });
-						if (auto* ch = notif_ch(); ch) { if (!slow_flush("Something went wrong while flushing the list. Trying again in 10 seconds.", *ch)) throw - 3; }
+						logg->info("Something went wrong while flushing the list. Trying again in 10 seconds.");
+						if (auto* ch = notif_ch(); ch) { if (!slow_flush("Something went wrong while flushing the list. Trying again in 10 seconds.", *ch, guildid, thebot->log)) throw - 3; }
 						else throw 1;
+
 						std::this_thread::yield();
 						std::this_thread::sleep_for(std::chrono::seconds(10));
+						std::this_thread::yield();
 						break;
 					case 3:
-						print([&] {std::cout << "Sorry, but I cannot find the flush channel anymore. You should try again." << std::endl; });
-						if (auto* ch = notif_ch(); ch) { if (!slow_flush("Sorry, but I cannot find the flush channel anymore. You should try again.", *ch)) throw - 3; }
+						logg->info("Sorry, but I cannot find the flush channel anymore. You should try again.");
+						if (auto* ch = notif_ch(); ch) { if (!slow_flush("Sorry, but I cannot find the flush channel anymore. You should try again.", *ch, guildid, thebot->log)) throw - 3; }
 						else throw 1;
+
 						std::this_thread::yield();
+
 						break;
 						// -1 (just_die) just dies...
 					}
@@ -404,32 +462,55 @@ void data_being_worked_on::work() {
 
 				auto get_and_send = [&] {
 					int answr = get_messages_one_channel();
+					if (just_die) {
+						logg->warn("[Local] Guild #{} got emergency die call. Ending now.", guildid);
+						logg->info("[Local] Guild #{} ended all tasks.", guildid);
+					}
 					switch (answr) {
 					case 0:
 						doing = in_order.size();
 					case 1:
-						print([&] {std::cout << "Done reading this chat." << std::endl; });
-						if (auto* ch = notif_ch(); ch) { if (!slow_flush("Done reading this chat.", *ch)) throw - 3; }
-						while (in_order.size() > 0) send(); // once get_message is done, even with crashes, it can flush everything
+						logg->info("Done reading this chat.");
+						if (auto* ch = notif_ch(); ch) { if (!slow_flush("Done reading this chat.", *ch, guildid, thebot->log)) throw - 3; }
+
+						std::this_thread::yield();
+						std::this_thread::sleep_for(wait_for_auto());
+						std::this_thread::yield();
+
+						while (in_order.size() > 0 && !just_die) { // once get_message is done, even with crashes, it can flush everything
+							logg->info("Preparing to flush a chat on Guild #{}", guildid);
+							send();
+							if (just_die) {
+								logg->warn("[Local] Guild #{} got emergency die call. Ending now.", guildid);
+								logg->info("[Local] Guild #{} ended all tasks.", guildid);
+							}
+							else logg->info("Fully flushed a chat on Guild #{}", guildid);
+						}
 						break;
 					case 2:
-						print([&] {std::cout << "[" << failures << "/10] Couldn't get channel's messages. Trying again in 10 seconds." << std::endl; });
-						if (auto* ch = notif_ch(); ch) { if (!slow_flush("Couldn't get channel's messages. Trying again in 10 seconds.", *ch)) throw - 3; }
+						logg->warn("[{}/10] Couldn't get channel's messages. Trying again in 10 seconds.", failures);
+						if (auto* ch = notif_ch(); ch) { if (!slow_flush("Couldn't get channel's messages. Trying again in 10 seconds.", *ch, guildid, thebot->log)) throw - 3; }
 						else throw 1;
+
 						std::this_thread::yield();
 						std::this_thread::sleep_for(std::chrono::seconds(10));
+						std::this_thread::yield();
+
 						break;
 					case 3:
-						print([&] {std::cout << "Something went wrong while creating the list. Trying again in 10 seconds." << std::endl; });
-						if (auto* ch = notif_ch(); ch) { if (!slow_flush("Something went wrong while creating the list. Trying again in 10 seconds.", *ch)) throw - 3; }
+						logg->warn("Something went wrong while creating the list. Trying again in 10 seconds.");
+						if (auto* ch = notif_ch(); ch) { if (!slow_flush("Something went wrong while creating the list. Trying again in 10 seconds.", *ch, guildid, thebot->log)) throw - 3; }
 						else throw 1;
+
 						std::this_thread::yield();
 						std::this_thread::sleep_for(std::chrono::seconds(10));
+						std::this_thread::yield();
+
 						break;
 					default: // use -1
 						if (just_die) {
-							print([&] {std::cout << "[Local] Guild #" << guildid << " got emergency die call. Ending now." << std::endl; });
-							print([&] {std::cout << "[Local] Guild #" << guildid << " ended all tasks." << std::endl; });
+							logg->warn("[Local] Guild #{} got emergency die call. Ending now.", guildid);
+							logg->info("[Local] Guild #{} ended all tasks.", guildid);
 						}
 						return;
 					}
@@ -440,15 +521,6 @@ void data_being_worked_on::work() {
 						thread_in_works = false;
 						return;
 					}
-
-					/*while (in_order.size() > 0) {
-						print([&] {std::cout << "[Local] Has buffer to flush, so flush time." << std::endl; });
-						send();
-						if (just_die) {
-							thread_in_works = false;
-							return;
-						}
-					}*/
 
 					if (just_die) {
 						thread_in_works = false;
@@ -468,10 +540,11 @@ void data_being_worked_on::work() {
 					thread_in_works = false;
 					return;
 				}
-				print([&] {std::cout << "[Local] Something went wrong. Trying again in 20 seconds." << std::endl; });
+				logg->error("[Local] Something went wrong. Trying again in 20 seconds.");
 
 				std::this_thread::yield();
 				std::this_thread::sleep_for(std::chrono::seconds(20));
+				std::this_thread::yield();
 				continue;
 			}
 			got_done = true;
@@ -481,22 +554,27 @@ void data_being_worked_on::work() {
 				thread_in_works = false;
 				return;
 			}
-			print([&] {std::cout << "[Local] Something went wrong... Bot issues? Trying again in 20 seconds..." << std::endl; });
+			logg->error("[Local] Something went wrong... Bot issues? Trying again in 20 seconds...");
 			std::this_thread::yield();
 			std::this_thread::sleep_for(std::chrono::seconds(20));
+			std::this_thread::yield();
 		}
 	}
 
 
-	print([&] {std::cout << "Ended tasks successfully. Cleaning up..." << std::endl; });
-	if (auto* ch = notif_ch(); ch) slow_flush("Ended tasks successfully.", *ch);
+	logg->info("Ended tasks successfully. Cleaning up...");
+	if (auto* ch = notif_ch(); ch) slow_flush("Ended tasks successfully.", *ch, guildid, thebot->log);
+
+	std::this_thread::yield();
+	std::this_thread::sleep_for(wait_for_auto());
+	std::this_thread::yield();
 
 	if (last_step) {
 		last_step.reset();
 	}
 	std::remove(last_step_path.c_str());
 
-	print([&] {std::cout << "Cleaned up." << std::endl; });
+	logg->info("Cleaned up.");
 
 	try {
 		auto u = thebot->guild_create(guildid, &thebot->get_shard_by_guild(guildid));
@@ -504,13 +582,13 @@ void data_being_worked_on::work() {
 	}
 	catch (aegis::error e) {
 		static aegis::category one;
-		print([&] {std::cout << "Guild #" << guildid << " failed to update nickname: " << one.message(e) << std::endl; });
+		logg->warn("Guild #{} failed to update nickname: {}", guildid, one.message(e));
 	}
 	catch (std::exception e) {
-		print([&] {std::cout << "Guild #" << guildid << " failed to update nickname: " << e.what() << std::endl; });
+		logg->warn("Guild #{} failed to update nickname: {}", guildid, e.what());
 	}
 	catch (...) {
-		print([&] {std::cout << "Guild #" << guildid << " failed to update nickname. Unknown error." << std::endl; });
+		logg->warn("Guild #{} failed to update nickname. Unknown error.", guildid);
 	}
 
 	thread_in_works = false;
@@ -521,15 +599,20 @@ std::chrono::milliseconds data_being_worked_on::wait_for_auto()
 	auto diff = (std::chrono::milliseconds(1230) - (NOW_T - last_call));
 	last_call = NOW_T;
 	
-	print([&] {std::cout << "T@" << (fabs(diff.count()) > 9999 ? (std::to_string((int)(diff.count() / 1000)) + " s") : (std::to_string(diff.count()) + " ms")) << "   \r"; });
+	if (diff.count() < -3000) logg->warn("Hiccup at Guild #{}", guildid);
+
+
+	std::cout << "T@" << (fabs(diff.count()) > 4000 ? (std::to_string((int)(diff.count() / 1000)) + " s") : (std::to_string(diff.count()) + " ms")) << "   \r";
 
 	if (diff.count() < 850) {
 		diff = std::chrono::milliseconds(850);
 	}
-	else if (diff.count() > 1000) {
-		//if (diff.count() < 0) print([&] {std::cout << "Got bizarre time on guild #" << guildid << " of " << diff.count() << " ms. Doing 1000 ms instead." << std::endl; });
-		diff = std::chrono::milliseconds(1000);
+	else if (diff.count() > 1050) {
+		//if (diff.count() < 0) logg->info("Got bizarre time on guild #" << guildid << " of " << diff.count() << " ms. Doing 1000 ms instead.");
+		diff = std::chrono::milliseconds(1050);
 	}
+	//logg->info("Guild #{} relaxing {} ms...", guildid, diff.count());
+
 	return diff;
 }
 
@@ -544,84 +627,15 @@ aegis::channel* data_being_worked_on::specific_ch(aegis::snowflake ch) {
 	return thebot->guild_create(guildid, &thebot->get_shard_by_guild(guildid))->get_channel(ch);
 }
 
-bool data_being_worked_on::slow_flush(std::string str, aegis::channel& ch) {
-	return slow_flush(aegis::create_message_t().content(str), ch);
-}
-
-bool data_being_worked_on::slow_flush(aegis::create_message_t m, aegis::channel& ch) {
-	for (size_t tries = 0; tries < 7; tries++) {
-		try {
-			for (size_t p = 0; p < 4; p++) std::this_thread::yield();
-			ch.create_message(m).get();
-			std::this_thread::sleep_for(wait_for_auto());
-			return true;
-		}
-		catch (std::exception e) {
-			print([&] {std::cout << "[Local][" << tries + 1 << "/7] SlowFlush couldn't send message. Got error: " << e.what() << std::endl; });
-			for (size_t p = 0; p < 4; p++) std::this_thread::yield();
-			std::this_thread::sleep_for(wait_for_auto());
-		}
-		catch (...) {
-			print([&] {std::cout << "[Local][" << tries + 1 << "/7] SlowFlush couldn't send message. Unknown error." << std::endl; });
-			for (size_t p = 0; p < 4; p++) std::this_thread::yield();
-			std::this_thread::sleep_for(wait_for_auto());
-		}
-	}
-	return false;
-}
-
-bool data_being_worked_on::slow_flush_embed(nlohmann::json emb, aegis::channel& ch) {
-	for (size_t tries = 0; tries < 7; tries++) {
-		try {
-			for (size_t p = 0; p < 4; p++) std::this_thread::yield();
-			ch.create_message_embed({}, emb).get();
-			std::this_thread::sleep_for(wait_for_auto());
-			return true;
-		}
-		catch (std::exception e) {
-			print([&] {std::cout << "[Local][" << tries + 1 << "/7] SlowFlushEmbed couldn't send message. Got error: " << e.what() << std::endl; });
-			for (size_t p = 0; p < 4; p++) std::this_thread::yield();
-			std::this_thread::sleep_for(wait_for_auto());
-		}
-		catch (...) {
-			print([&] {std::cout << "[Local][" << tries + 1 << "/7] SlowFlushEmbed couldn't send message. Unknown error." << std::endl; });
-			for (size_t p = 0; p < 4; p++) std::this_thread::yield();
-			std::this_thread::sleep_for(wait_for_auto());
-		}
-	}
-	return false;
-}
-
-bool data_being_worked_on::slow_flush_embed(aegis::gateway::objects::embed emb, aegis::channel& ch) {
-	for (size_t tries = 0; tries < 7; tries++) {
-		try {
-			for (size_t p = 0; p < 4; p++) std::this_thread::yield();
-			ch.create_message_embed({}, emb).get();
-			std::this_thread::sleep_for(wait_for_auto());
-			return true;
-		}
-		catch (std::exception e) {
-			print([&] {std::cout << "[Local][" << tries + 1 << "/7] SlowFlushEmbed couldn't send message. Got error: " << e.what() << std::endl; });
-			for (size_t p = 0; p < 4; p++) std::this_thread::yield();
-			std::this_thread::sleep_for(wait_for_auto());
-		}
-		catch (...) {
-			print([&] {std::cout << "[Local][" << tries + 1 << "/7] SlowFlushEmbed couldn't send message. Unknown error." << std::endl; });
-			for (size_t p = 0; p < 4; p++) std::this_thread::yield();
-			std::this_thread::sleep_for(wait_for_auto());
-		}
-	}
-	return false;
-}
-
 void data_being_worked_on::flush_file()
 {
 	static std::mutex m;
 
 	if (!last_step) {
-		print([&] {std::cout << "[!] Unsolvable task in guild ID=" << guildid << ". Please restart." << std::endl; });
+		logg->error("[!] Unsolvable task in Guild #{}. Please restart.", guildid);
 		return;
 	}
+	//logg->info("[!] Guild #{} is about to flush its file...", guildid);
 
 	std::lock_guard locking(m); // only one thread saving at a time just to be sure, I guess...
 
@@ -642,7 +656,29 @@ void data_being_worked_on::flush_file()
 	auto dumped = hmm.dump() + u8"□□□□□LSW□□□□□";
 
 	fwrite(dumped.c_str(), sizeof(char), dumped.length(), last_step.get());
-	fflush(last_step.get());
+
+	bool once_fail = false;
+
+	while (fflush(last_step.get()) != 0) {
+		once_fail = true;
+		logg->info("[!] Guild #{} failed to flush file: ERRCODE = {}", guildid, ferror(last_step.get()));
+		logg->info("[!] Guild #{} trying to reopen the file...", guildid);
+		last_step.reset();
+
+		FILE* novafile = nullptr;
+		while (fopen_s(&novafile, last_step_path.c_str(), "rb+") != 0) {
+			logg->info("[!] Guild #{} CAN'T OPEN FILE! Trying again in 10 seconds...", guildid);
+			std::this_thread::yield();
+			std::this_thread::sleep_for(std::chrono::seconds(10));
+			std::this_thread::yield();
+		}
+		logg->info("[!] Guild #{} reopened the file. Saving...", guildid);
+
+		last_step.reset(novafile);
+		fwrite(dumped.c_str(), sizeof(char), dumped.length(), last_step.get());
+	}
+
+	if (once_fail) logg->info("[!] Guild #{} finally flushed file.", guildid);
 }
 
 bool data_being_worked_on::prepare_and_load_any_pendencies(bool create)
@@ -671,28 +707,28 @@ bool data_being_worked_on::prepare_and_load_any_pendencies(bool create)
 
 		nlohmann::json hmm = nlohmann::json::parse(data);
 
-		print([&] {std::cout << "[!] Got not done task from guild ID=" << guildid << std::endl; });
+		logg->warn("[!] Got not done task from Guild #{}", guildid);
 
 		try {
-			if (hmm.contains("in_order")) {
+			if (hmm.count("in_order") && !hmm["in_order"].is_null()) {
 				this->in_order = hmm["in_order"].get<std::unordered_map<aegis::snowflake, std::pair<std::map<std::string, custom_message_save>, std::string>>>();
 			}
-			if (hmm.contains("channels_to_save")) {
+			if (hmm.count("channels_to_save") && !hmm["channels_to_save"].is_null()) {
 				this->channels_to_save = hmm["channels_to_save"].get<std::vector<aegis::snowflake>>();
 			}
-			if (hmm.contains("channel_output")) {
+			if (hmm.count("channel_output") && !hmm["channel_output"].is_null()) {
 				this->channel_output = hmm["channel_output"].get<aegis::snowflake>();
 			}
-			if (hmm.contains("channel_from")) {
+			if (hmm.count("channel_from") && !hmm["channel_from"].is_null()) {
 				this->channel_from = hmm["channel_from"].get<aegis::snowflake>();
 			}
 		}
 		catch (std::exception e) {
-			print([&] {std::cout << "[!] Failed to read saved data from guild ID=" << guildid << ": " << e.what() << std::endl; });
+			logg->error("[!] Failed to read saved data from Guild #{}: {}", guildid, e.what());
 			return false;
 		}
 		catch (...) {
-			print([&] {std::cout << "[!] Failed to read saved data from guild ID=" << guildid << " (unknown error)" << std::endl; });
+			logg->error("[!] Failed to read saved data from Guild #{}.");
 			return false;
 		}
 		return true;
@@ -703,12 +739,12 @@ bool data_being_worked_on::prepare_and_load_any_pendencies(bool create)
 
 			flush_file();
 
-			print([&] {std::cout << "[!] Prepared file for guild ID=" << guildid << std::endl; });
+			logg->info("[!] Prepared file for Guild #{}", guildid);
 
 			return true;
 		}
 		else {
-			print([&] {std::cout << "[!] FATAL ERROR guild ID=" << guildid << " could not create work file!" << std::endl; });
+			logg->info("[!] FATAL ERROR Guild #{} - could not create work file!", guildid);
 			return false;
 		}
 	}
@@ -718,27 +754,29 @@ bool data_being_worked_on::prepare_and_load_any_pendencies(bool create)
 data_being_worked_on::data_being_worked_on(std::shared_ptr<aegis::core> thebot, aegis::snowflake guildid)
 {
 	this->thebot = thebot;
+	this->logg = thebot->log;
 	this->guildid = guildid;
 
 	if (!prepare_and_load_any_pendencies(false)) {
-		print([&] {std::cout << "[!] FATAL ERROR guild ID=" << guildid << " CANNOT LOAD LATEST WORK!" << std::endl; });
+		logg->error("[!] FATAL ERROR Guild #{} CANNOT LOAD LATEST WORK!", guildid);
 	}
 	else {
 		thread_in_works = true;
-		if (auto* ch = notif_ch(); ch) slow_flush("Sorry, something went wrong (probably internet fluctuation), but I'm trying to work on it...", *ch);
+		if (auto* ch = notif_ch(); ch) slow_flush("Sorry, something went wrong (probably internet fluctuation or my pc is weird), but I'm trying to work on it...", *ch, guildid, thebot->log);
 		in_works = std::thread([&] {work(); });
 	}
 }
 
 data_being_worked_on::data_being_worked_on(std::shared_ptr<aegis::core> thebot, aegis::snowflake guildid, aegis::channel& ch_from, aegis::snowflake save_where, std::vector<aegis::snowflake> channels_to_save) {
 	this->thebot = thebot;
+	this->logg = thebot->log;
 	this->guildid = guildid;
 	this->channel_from = ch_from.get_id();
 	this->channel_output = save_where;
 	this->channels_to_save = channels_to_save;
 
 	if (!prepare_and_load_any_pendencies(true)) {
-		print([&] {std::cout << "[!] FATAL ERROR guild ID=" << guildid << " could not create work file!" << std::endl; });
+		logg->info("[!] FATAL ERROR Guild #{} - could not create work file!", guildid);
 		exit(EXIT_FAILURE);
 	}
 
@@ -747,7 +785,7 @@ data_being_worked_on::data_being_worked_on(std::shared_ptr<aegis::core> thebot, 
 }
 
 data_being_worked_on::~data_being_worked_on() {
-	print([&] {std::cout << "[!] Closing guild #" << guildid << "..." << std::endl; });
+	logg->info("[!] Closing Guild #{}...", guildid);
 	if (in_works.joinable()) in_works.join();
 
 	try {
@@ -756,24 +794,23 @@ data_being_worked_on::~data_being_worked_on() {
 	}
 	catch (aegis::error e) {
 		static aegis::category one;
-		print([&] {std::cout << "Guild #" << guildid << " failed to update nickname: " << one.message(e) << std::endl; });
+		logg->warn("Guild #{} failed to update nickname: {}", guildid, one.message(e));
 	}
 	catch (std::exception e) {
-		print([&] {std::cout << "Guild #" << guildid << " failed to update nickname: " << e.what() << std::endl; });
+		logg->warn("Guild #{} failed to update nickname: {}", guildid, e.what());
 	}
 	catch (...) {
-		print([&] {std::cout << "Guild #" << guildid << " failed to update nickname. Unknown error." << std::endl; });
+		logg->warn("Guild #{} failed to update nickname. Unknown error.", guildid);
 	}
 
-	print([&] {std::cout << "[!] Closed guild #" << guildid << "." << std::endl; });
+	logg->info("[!] Closed Guild #{}.", guildid);
 }
 
 void data_being_worked_on::has_to_die_now_please_goodbye()
 {
-	print([&] {std::cout << "[!] Guild #" << guildid << " got STOP call. Set to end soon." << std::endl; });
+	logg->info("[!] Guild #{} got STOP call. Set to end soon.", guildid);
 	just_die = true;
 	//if (in_works.joinable()) in_works.join();
-	//print([&] {std::cout << "[!] Ended tasks successfully (emergency way) on guild #" << guildid << "." << std::endl; });
 }
 
 bool data_being_worked_on::done() {
