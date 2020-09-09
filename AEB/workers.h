@@ -13,7 +13,7 @@
 #define NOW_T std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
 
 const std::string project_name = "AEB";
-const std::string version = "V1.6.4.2";
+const std::string version = "V1.6.4.3";
 const unsigned long long idd = 749852332321144863;
 const unsigned long long mee_dev = 280450898885607425; // myself, for debugging and help
 

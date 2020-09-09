@@ -92,7 +92,10 @@ int data_being_worked_on::get_messages_one_channel() {
 
 	for (size_t p = 0; p < 7; p++) {
 		try {
-			auto messages = this_ch->get_messages(message_get_formula).get();
+			auto mmm = this_ch->get_messages(message_get_formula);
+			while (!mmm.available()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			auto messages = mmm.get();
+
 
 			for (auto& o : messages._messages) {
 				in_order[one].first[o.timestamp + std::to_string(o.get_id())] = o;
@@ -123,8 +126,11 @@ int data_being_worked_on::get_messages_one_channel() {
 			}
 
 			message_get_formula.message_id(last_now);
-			latest_messages._messages.clear();
-			latest_messages = this_ch->get_messages(message_get_formula).get();
+			latest_messages._messages.clear(); 
+
+			auto mmm = this_ch->get_messages(message_get_formula);
+			while (!mmm.available()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			latest_messages = mmm.get();
 
 			bool changed_once = false;
 
