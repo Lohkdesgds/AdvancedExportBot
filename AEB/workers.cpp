@@ -105,9 +105,6 @@ int data_being_worked_on::get_messages_one_channel() {
 		}
 		catch (...) {
 			logg->info("[{}/7][Local] Failed to get last message on channel #{}. No worries if it fails all the times.", p + 1, one);
-			std::this_thread::yield();
-			std::this_thread::sleep_for(std::chrono::milliseconds(500));
-			std::this_thread::yield();
 		}
 	}
 
@@ -310,10 +307,6 @@ int data_being_worked_on::send_one_channels_messages() {
 					if (!slow_flush(msg, *copy_ch, guildid, thebot->log)) throw - 3;
 					k.has_cleared_content_already = true;
 					flush_file();
-
-					std::this_thread::yield();
-					std::this_thread::sleep_for(wait_for_auto());
-					std::this_thread::yield();
 				}
 				else { // split if more
 					msg.content(u8"```md\n[" + k.timestamp + u8"](" + key + u8")<" + k.username + "#" + k.discriminator + u8"> sent huge block:```"); // send message content itself just to be sure 2000 chars are cool
@@ -322,10 +315,6 @@ int data_being_worked_on::send_one_channels_messages() {
 					if (!slow_flush(aegis::create_message_t().content(k.content), *copy_ch, guildid, thebot->log)) throw - 3;
 					k.has_cleared_content_already = true;
 					flush_file();
-
-					std::this_thread::yield();
-					std::this_thread::sleep_for(wait_for_auto());
-					std::this_thread::yield();
 				}
 			}
 
@@ -341,10 +330,6 @@ int data_being_worked_on::send_one_channels_messages() {
 
 				k.reactions.erase(k.reactions.begin());
 				flush_file();
-
-				std::this_thread::yield();
-				std::this_thread::sleep_for(wait_for_auto());
-				std::this_thread::yield();
 			}
 
 			// - - - - - - - - - - > EMBEDS < - - - - - - - - - - //
@@ -361,10 +346,6 @@ int data_being_worked_on::send_one_channels_messages() {
 
 				k.embeds_json.erase(k.embeds_json.begin());
 				flush_file();
-
-				std::this_thread::yield();
-				std::this_thread::sleep_for(wait_for_auto());
-				std::this_thread::yield();
 			}
 
 			// - - - - - - - - - - > FILES < - - - - - - - - - - //
@@ -384,10 +365,6 @@ int data_being_worked_on::send_one_channels_messages() {
 
 				if (down.read().size() > MAX_FILE_SIZE) {
 					if (!slow_flush("`Had to split file. This is the RAW data split in " + std::to_string((int)(1 + (down.read().size() - 1) / MAX_FILE_SIZE)) + " slices`.", *copy_ch, guildid, thebot->log)) throw -3;
-
-					std::this_thread::yield();
-					std::this_thread::sleep_for(wait_for_auto());
-					std::this_thread::yield();
 				}
 
 				for (size_t cuts = 0; cuts <= ((down.read().size() == 0 ? 0 : down.read().size() - 1) / MAX_FILE_SIZE); cuts++) { // if 8000, goes once.
@@ -400,10 +377,6 @@ int data_being_worked_on::send_one_channels_messages() {
 					msg2.content(i.second);
 
 					if (!slow_flush(msg2, *copy_ch, guildid, thebot->log)) throw -3;
-
-					std::this_thread::yield();
-					std::this_thread::sleep_for(wait_for_auto());
-					std::this_thread::yield();
 				}
 
 				k.attachments.erase(k.attachments.begin());
@@ -440,10 +413,6 @@ void data_being_worked_on::work() {
 						if (auto* ch = notif_ch(); ch) { if (!slow_flush("Done flushing this chat.", *ch, guildid, thebot->log)) throw - 3; }
 						else throw 1;
 
-						std::this_thread::yield();
-						std::this_thread::sleep_for(wait_for_auto());
-						std::this_thread::yield();
-
 						break;
 					case 2:
 						logg->info("Something went wrong while flushing the list. Trying again in 10 seconds.");
@@ -479,9 +448,9 @@ void data_being_worked_on::work() {
 						logg->info("Done reading this chat.");
 						if (auto* ch = notif_ch(); ch) { if (!slow_flush("Done reading this chat.", *ch, guildid, thebot->log)) throw - 3; }
 
-						std::this_thread::yield();
+						/*std::this_thread::yield();
 						std::this_thread::sleep_for(wait_for_auto());
-						std::this_thread::yield();
+						std::this_thread::yield();*/
 
 						while (in_order.size() > 0 && !just_die) { // once get_message is done, even with crashes, it can flush everything
 							logg->info("Preparing to flush a chat on Guild #{}", guildid);
@@ -571,9 +540,9 @@ void data_being_worked_on::work() {
 	logg->info("Ended tasks successfully. Cleaning up...");
 	if (auto* ch = notif_ch(); ch) slow_flush("Ended tasks successfully.", *ch, guildid, thebot->log);
 
-	std::this_thread::yield();
+	/*std::this_thread::yield();
 	std::this_thread::sleep_for(wait_for_auto());
-	std::this_thread::yield();
+	std::this_thread::yield();*/
 
 	if (last_step) {
 		last_step.reset();
@@ -600,7 +569,7 @@ void data_being_worked_on::work() {
 	thread_in_works = false;
 }
 
-std::chrono::milliseconds data_being_worked_on::wait_for_auto()
+/*std::chrono::milliseconds data_being_worked_on::wait_for_auto()
 {
 	auto diff = (std::chrono::milliseconds(1230) - (NOW_T - last_call));
 	last_call = NOW_T;
@@ -621,7 +590,7 @@ std::chrono::milliseconds data_being_worked_on::wait_for_auto()
 
 	return diff;
 }
-
+*/
 
 aegis::channel* data_being_worked_on::notif_ch() {
 	return thebot->guild_create(guildid, &thebot->get_shard_by_guild(guildid))->get_channel(channel_from);
@@ -810,6 +779,11 @@ data_being_worked_on::~data_being_worked_on() {
 	}
 
 	logg->info("[!] Closed Guild #{}.", guildid);
+}
+
+bool data_being_worked_on::is_guild(aegis::snowflake id)
+{
+	return guildid == id;
 }
 
 void data_being_worked_on::has_to_die_now_please_goodbye()

@@ -342,3 +342,5 @@ healthchecksdb
 keys.h
 *.wolflog
 *.wolflogv2
+*.bbv1
+config.json

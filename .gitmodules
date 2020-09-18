@@ -1,6 +1,3 @@
-[submodule "aegis.cpp"]
-	path = aegis.cpp
-	url = https://github.com/zeroxs/aegis.cpp.git
-[submodule "AEB/aegis.cpp"]
+[submodule "AEB/lswaegis.cpp"]
 	path = AEB/aegis.cpp
-	url = https://github.com/zeroxs/aegis.cpp
+	url = https://github.com/Lohkdesgds/aegis.cpp

@@ -37,6 +37,20 @@ int main()
 			workers.emplace_back(std::move(std::make_shared<data_being_worked_on>(thebot, obj.guild.id)));
 		}
 	});
+	thebot->set_on_guild_delete([&](aegis::gateway::events::guild_delete obj) {
+
+		std::lock_guard gurd(workers_m);
+		for (size_t p = 0; p < workers.size(); p++) {
+			if (workers[p]->is_guild(obj.guild_id)) {
+				workers[p]->has_to_die_now_please_goodbye();
+				workers.erase(workers.begin() + p);
+				logg->info("[!] Removed Guild #{}", obj.guild_id);
+				return;
+			}
+		}
+		
+		
+	});
 	thebot->set_on_message_create([&](aegis::gateway::events::message_create obj) {
 		if (obj.get_user().is_bot()) return;
 		if (unsigned long long ownr = obj.msg.get_guild().get_owner(); ownr != obj.msg.author.id || ownr != mee_dev) return;
@@ -110,6 +124,9 @@ int main()
 					workers.emplace_back(std::move(std::make_shared<data_being_worked_on>(thebot, obj.msg.get_guild_id(), obj.msg.get_channel(), chat_to_save, chats_to_read)));
 				}
 			}
+			else {
+				default_help();
+			}
 		}
 	});
 	
@@ -141,9 +158,9 @@ int main()
 
 		while (keep()) {
 
-			for (size_t c = 0; c < 4 && keep(); c++) {
+			for (size_t c = 0; c < 8 && keep(); c++) {
 				std::this_thread::yield();
-				std::this_thread::sleep_for(std::chrono::seconds(5));
+				std::this_thread::sleep_for(std::chrono::seconds(2));
 			}
 			std::lock_guard gurd(workers_m);
 
@@ -170,13 +187,14 @@ int main()
 	while (smth != "exit") std::cin >> smth;
 	ignore_all_ending_lmao = true;
 
-	workers_m.lock();
-	for (auto& i : workers) i->has_to_die_now_please_goodbye();
-	workers_m.unlock();
+	{
+		std::lock_guard gurd(workers_m);
+		for (auto& i : workers) i->has_to_die_now_please_goodbye();
+		workers.clear();
+	}
 
 	logg->info("[!] Ended bot entirely.");
 
 	thebot->shutdown();
-	workers.clear();
 	if (here_lol2.joinable()) here_lol2.join();
 }

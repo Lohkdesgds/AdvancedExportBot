@@ -1,4 +1,6 @@
 #pragma once
+
+
 #include <aegis.hpp>
 #include "download/download.h"
 #include "slow_flush.h"
@@ -13,7 +15,7 @@
 #define NOW_T std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
 
 const std::string project_name = "AEB";
-const std::string version = "V1.6.4.3";
+const std::string version = "V1.6.4.4";
 const unsigned long long idd = 749852332321144863;
 const unsigned long long mee_dev = 280450898885607425; // myself, for debugging and help
 
@@ -57,8 +59,7 @@ class data_being_worked_on {
 	aegis::snowflake channel_output;
 	std::vector<aegis::snowflake> channels_to_save;
 
-	std::chrono::milliseconds last_call = NOW_T,
-		last_thousand = NOW_T;
+	std::chrono::milliseconds last_thousand = NOW_T;
 
 	std::unique_ptr<FILE, D> last_step;
 	std::string last_step_path;
@@ -80,7 +81,7 @@ class data_being_worked_on {
 
 	void work();
 
-	std::chrono::milliseconds wait_for_auto(); // secure mode? fixed return 1005 ms
+	//std::chrono::milliseconds wait_for_auto(); // secure mode? fixed return 1005 ms
 
 	aegis::channel* notif_ch();
 	aegis::channel* save_ch();
@@ -93,6 +94,8 @@ public:
 	data_being_worked_on(std::shared_ptr<aegis::core>, aegis::snowflake, aegis::channel&, aegis::snowflake, std::vector<aegis::snowflake>);
 
 	~data_being_worked_on();
+
+	bool is_guild(aegis::snowflake);
 
 	void has_to_die_now_please_goodbye();
 
